@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RegistroPagos · Capital</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  dialog form { display: flex; flex-direction: column; gap: 14px; }
+  .botones { display: flex; justify-content: flex-end; gap: 10px; }
+</style>
+</head>
+<body>
+<div id="barra"></div>
+<main class="pagina">
+  <div class="cabecera">
+    <div>
+      <h1>Capital</h1>
+      <div class="sub">Lo que cada persona ingresó al negocio</div>
+    </div>
+    <button type="button" id="nuevo" class="btn">Nuevo aporte</button>
+  </div>
+  <div id="error" class="sub" style="color: #9B1C12" role="alert"></div>
+
+  <div class="resumen">
+    <div class="caja" style="background: #E3F1EE"><div class="l" style="color: #0B5445">Capital total</div><div class="v" style="color: #0B5445" id="total">…</div></div>
+  </div>
+
+  <div class="tarjeta">
+    <div class="tabla">
+      <table>
+        <thead><tr><th>Nombre</th><th>Monto</th><th>Fecha</th><th>Acciones</th></tr></thead>
+        <tbody id="filas"></tbody>
+      </table>
+    </div>
+    <div id="vacio" class="vacio" hidden>Todavía no hay aportes.</div>
+    <div class="sub" style="margin-top: 12px">Es solo un registro: no limita los préstamos ni cambia las ganancias. Cada cambio queda en la auditoría.</div>
+  </div>
+</main>
+
+<dialog id="dialogo">
+  <form id="formulario" novalidate>
+    <h2 id="titulo-dialogo" style="margin: 0; font-size: 22px"></h2>
+    <div class="campo"><label for="f-nombre">Nombre</label><input id="f-nombre" type="text" maxlength="150" autocomplete="off"></div>
+    <div class="campo"><label for="f-monto">Monto (S/)</label><input id="f-monto" type="text" inputmode="decimal" autocomplete="off"></div>
+    <div class="campo"><label for="f-fecha">Fecha</label><input id="f-fecha" type="date"></div>
+    <div id="error-form" class="error-form" role="alert" aria-live="polite"></div>
+    <div class="botones">
+      <button type="button" id="cancelar" class="btn-sec">Cancelar</button>
+      <button type="submit" id="guardar" class="btn">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="dialogo-eliminar">
+  <div style="display: flex; flex-direction: column; gap: 14px">
+    <h2 style="margin: 0; font-size: 22px">Eliminar aporte</h2>
+    <div id="texto-eliminar"></div>
+    <div class="sub">No se puede deshacer, pero queda anotado en la auditoría.</div>
+    <div id="error-eliminar" class="error-form" role="alert" aria-live="polite"></div>
+    <div class="botones">
+      <button type="button" id="cancelar-eliminar" class="btn-sec">Cancelar</button>
+      <button type="button" id="confirmar-eliminar" class="btn" style="background: #9B1C12">Sí, eliminar</button>
+    </div>
+  </div>
+</dialog>
+
+<script src="/js/api.js"></script>
+<script>
+  if (!sessionStorage.getItem('token')) location.href = '/index.html';
+  pintarBarra('capital');
+
+  const dialogo = document.getElementById('dialogo');
+  const formulario = document.getElementById('formulario');
+  const errorForm = document.getElementById('error-form');
+  const botonGuardar = document.getElementById('guardar');
+  const campos = {
+    nombre: document.getElementById('f-nombre'),
+    monto: document.getElementById('f-monto'),
+    fecha: document.getElementById('f-fecha')
+  };
+  let editandoId = null;
+
+  // "500", "500.50", "500,50" y "1,000" (mil) -> número. Devuelve null si no es un número.
+  function numero(texto) {
+    let t = String(texto).trim().replace(/\s/g, '');
+    if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g, '');
+    else t = t.replace(',', '.');
+    const n = Number(t);
+    return t !== '' && Number.isFinite(n) ? n : null;
+  }
+
+  function hoyLima() {
+    return new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+  }
+
+  function dato(texto) {
+    const td = document.createElement('td');
+    td.textContent = texto;
+    return td;
+  }
+
+  async function cargar() {
+    try {
+      const r = await api('/api/aportes');
+      document.getElementById('error').textContent = '';
+      document.getElementById('total').textContent = soles(r.total);
+
+      const cuerpo = document.getElementById('filas');
+      cuerpo.innerHTML = '';
+      r.aportes.forEach(a => {
+        const tr = document.createElement('tr');
+        const tdNombre = dato(a.nombre);
+        tdNombre.style.fontWeight = '700';
+        tr.appendChild(tdNombre);
+        tr.appendChild(dato(soles(a.monto)));
+        tr.appendChild(dato(fechaCorta(a.fecha)));
+
+        const tdAccion = document.createElement('td');
+        const boton = document.createElement('button');
+        boton.type = 'button';
+        boton.className = 'btn-chico';
+        boton.textContent = 'Editar';
+        boton.addEventListener('click', () => abrirDialogo(a));
+        tdAccion.appendChild(boton);
+        const borrar = document.createElement('button');
+        borrar.type = 'button';
+        borrar.className = 'btn-chico';
+        borrar.style.marginLeft = '8px';
+        borrar.style.color = '#9B1C12';
+        borrar.textContent = 'Eliminar';
+        borrar.addEventListener('click', () => abrirEliminar(a));
+        tdAccion.appendChild(borrar);
+        tr.appendChild(tdAccion);
+
+        cuerpo.appendChild(tr);
+      });
+      document.getElementById('vacio').hidden = r.aportes.length > 0;
+    } catch (e) {
+      document.getElementById('error').textContent = e.message;
+    }
+  }
+
+  function abrirDialogo(aporte) {
+    editandoId = aporte ? aporte.id : null;
+    document.getElementById('titulo-dialogo').textContent = aporte ? 'Editar aporte' : 'Nuevo aporte';//si hay aporte , muestra editar aporte sino muestra nuevo aporte
+    campos.nombre.value = aporte ? aporte.nombre : ''; //si hay aporte coloca aporte.nombre en el campo.nombre
+    campos.monto.value = aporte ? aporte.monto : '';
+    campos.fecha.value = aporte ? aporte.fecha : hoyLima();
+    errorForm.textContent = '';
+    dialogo.showModal();//muestra el cuadro del elemento con id = dialogo
+    campos.nombre.focus();//pone el cursor en el campo nombre
+  }
+
+  document.getElementById('nuevo').addEventListener('click', () => abrirDialogo(null));// en este doc con el elemento Id nuevo estate atento si das click en nuevo abrirDialogo
+  document.getElementById('cancelar').addEventListener('click', () => dialogo.close());
+
+  formulario.addEventListener('submit', async (e) => {
+    e.preventDefault();//evita que la pagina se recargue
+    errorForm.textContent = '';// te muestra el error : "el nombre es obligatorio" en caso presiones el submit sin datos en el nombre
+    const monto = numero(campos.monto.value);
+    if (!campos.nombre.value.trim()) { errorForm.textContent = 'El nombre es obligatorio.'; return; } // si el campo.nombre es vacio // return detiene la funcion
+    if (monto === null || monto <= 0) { errorForm.textContent = 'Escribe un monto válido.'; return; }
+    if (!campos.fecha.value) { errorForm.textContent = 'La fecha es obligatoria.'; return; }
+
+    botonGuardar.disabled = true;
+    try { //intentamos enviar datos a la api
+      await api(editandoId ? '/api/aportes/' + editandoId : '/api/aportes', { //si editandoId no es nulo 
+        method: editandoId ? 'PUT' : 'POST', // si editantoId no es null ejecuta PUT(actualiza el registro) sino registra POST
+        body: { nombre: campos.nombre.value.trim(), monto, fecha: campos.fecha.value } //const monto = numero(campos.monto.value)
+      });
+      dialogo.close();// cierra la ventana del form si todo esta ok
+      await cargar();
+    } 
+    catch (err) {
+      errorForm.textContent = err.message;
+    } finally {
+      botonGuardar.disabled = false;
+    }
+  });
+
+  const dialogoEliminar = document.getElementById('dialogo-eliminar');
+  let eliminandoId = null;
+
+  function abrirEliminar(aporte) 
+  {
+    eliminandoId = aporte.id;
+    document.getElementById('texto-eliminar').textContent =
+      '¿Eliminar el aporte de ' + aporte.nombre + ' por ' + soles(aporte.monto) + '?';
+    document.getElementById('error-eliminar').textContent = '';
+    dialogoEliminar.showModal();
+  }
+
+  document.getElementById('cancelar-eliminar').addEventListener('click', () => dialogoEliminar.close());
+
+  document.getElementById('confirmar-eliminar').addEventListener('click', async (e) => {
+    const boton = e.currentTarget;
+    boton.disabled = true;
+    try {
+      await api('/api/aportes/' + eliminandoId, { method: 'DELETE' });
+      dialogoEliminar.close();
+      await cargar();
+    } catch (err) {
+      document.getElementById('error-eliminar').textContent = err.message;
+    } finally {
+      boton.disabled = false;
+    }
+  });
+  cargar();
+</script>
+</body>
+</html>

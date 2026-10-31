@@ -1,0 +1,301 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RegistroPagos · Nuevo préstamo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  .columnas { display: grid; grid-template-columns: minmax(280px, 400px) 1fr; gap: 20px; align-items: start; }
+  @media (max-width: 800px) { .columnas { grid-template-columns: 1fr; } }
+  form.datos { display: flex; flex-direction: column; gap: 14px; }
+  .tipos { display: flex; gap: 8px; }
+  .tipo { flex: 1; height: 44px; border: 1px solid var(--borde); border-radius: 8px; background: #fff; color: #3F5650; font-family: inherit; font-size: 15px; font-weight: 500; cursor: pointer; }
+  .tipo[aria-pressed="true"] { border: 2px solid var(--acento); background: #E3F1EE; color: var(--verde-texto); font-weight: 700; }
+  .dos { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+  .ayuda { font-size: 12px; color: var(--suave); }
+  #ayuda-vista { padding: 24px 8px; color: var(--suave); }
+  #ayuda-vista.mal { color: #9B1C12; }
+</style>
+</head>
+<body>
+<div id="barra"></div>
+<main class="pagina">
+  <div class="cabecera">
+    <div>
+      <h1 id="titulo-pagina">Nuevo préstamo</h1>
+      <div class="sub">El cálculo se actualiza mientras escribes</div>
+    </div>
+    <a href="prestamos.html" class="btn-sec" style="display: inline-flex; align-items: center; text-decoration: none;">Volver a la lista</a>
+  </div>  
+  <div class="columnas">
+    <form id="formulario" class="tarjeta datos" novalidate>
+      <div class="campo" hidden>
+        <label>Tipo de préstamo</label>
+        <div class="tipos">
+          <button type="button" class="tipo" id="tipo-fijas" aria-pressed="true">Cuotas fijas</button>
+          <button type="button" class="tipo" id="tipo-mensual" aria-pressed="false">Mensual flexible</button>
+        </div>
+      </div>
+      <div class="campo">
+        <label for="cliente">Cliente</label>
+        <select id="cliente"></select>
+      </div>
+      <div class="campo">
+        <label for="capital">Monto prestado (S/)</label>
+        <input id="capital" type="text" inputmode="decimal" autocomplete="off">
+      </div>
+      <div class="dos">
+        <div class="campo">
+          <label for="mayor">Interés mayor (%)</label>
+          <input id="mayor" type="text" inputmode="decimal" autocomplete="off">
+        </div>
+        <div class="campo">
+          <label for="menor">Interés menor (%), opcional</label>
+          <input id="menor" type="text" inputmode="decimal" autocomplete="off">
+        </div>
+      </div>
+      <div class="ayuda" style="margin-top: -8px">El mayor es lo que paga el cliente. El menor es tu ganancia; si lo dejas vacío, todo el interés es tuyo.</div>
+      <div class="campo" id="campo-cuotas">
+        <label for="cuotas">Número de cuotas</label>
+        <input id="cuotas" type="text" inputmode="numeric" autocomplete="off">
+      </div>
+      <div class="campo">
+        <label for="fecha">Fecha del primer cobro</label>
+        <input id="fecha" type="date">
+      </div>
+      <div id="error-form" class="error-form" role="alert" aria-live="polite"></div>
+      <button type="submit" id="crear" class="btn">Crear préstamo</button>
+      <a href="/prestamos.html" class="btn-sec" style="display: inline-flex; align-items: center; justify-content: center; text-decoration: none">Cancelar</a>
+    </form>
+
+    <div class="tarjeta" style="display: flex; flex-direction: column; gap: 16px">
+      <h2 id="titulo-vista" style="margin: 0; font-size: 18px">Vista previa del cronograma</h2>
+      <div class="sub">Aún no se guarda nada hasta que crees el préstamo</div>
+      <div id="ayuda-vista">Completa los datos para ver el cálculo.</div>
+      <div class="tabla" id="zona-tabla" hidden>
+        <table>
+          <thead><tr><th id="th-num">Cuota</th><th id="th-menor"></th><th id="th-dif"></th><th id="th-total">Total cuota</th></tr></thead>
+          <tbody id="filas"></tbody>
+        </table>
+      </div>
+      <div class="resumen" id="resumen" hidden>
+        <div class="caja"><div class="l">Capital total</div><div class="v" id="r-capital"></div></div>
+        <div class="caja"><div class="l" id="l-total"></div><div class="v" id="r-total"></div></div>
+        <div class="caja" style="background: #E3F1EE"><div class="l" style="color: #0B5445">Tu ganancia</div><div class="v" style="color: #0B5445" id="r-ganancia"></div></div>
+      </div>
+    </div>
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script>
+  if (!sessionStorage.getItem('token')) location.href = '/index.html';
+  pintarBarra('prestamos');
+
+  const c = {
+    cliente: document.getElementById('cliente'),
+    capital: document.getElementById('capital'),
+    mayor: document.getElementById('mayor'),
+    menor: document.getElementById('menor'),
+    cuotas: document.getElementById('cuotas'),
+    fecha: document.getElementById('fecha')
+  };
+  const errorForm = document.getElementById('error-form');
+  const botonCrear = document.getElementById('crear');
+  let tipo = 'CuotasFijas';
+  const idEditar = new URLSearchParams(location.search).get('id');
+  let turno = 0;
+  let espera;
+
+    const base = new Date(Date.now() - 5 * 3600 * 1000);
+    const ultimoDia = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 2, 0)).getUTCDate();
+    const proxima = new Date(Date.UTC(base.getUTCFullYear(), base.getUTCMonth() + 1, Math.min(base.getUTCDate(), ultimoDia)));
+    c.fecha.value = proxima.toISOString().slice(0, 10);
+    c.cuotas.value = '3';
+
+  // "500", "500.50", "500,50" y "1,000" (mil) -> número. Devuelve null si no es un número.
+  function numero(texto) {
+    let t = String(texto).trim().replace(/\s/g, '');
+    if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g, '');
+    else t = t.replace(',', '.');
+    const n = Number(t);
+    return t !== '' && Number.isFinite(n) ? n : null;
+  }
+
+  function dato(texto, negrita) {
+    const td = document.createElement('td');
+    td.textContent = texto;
+    if (negrita) td.style.fontWeight = '700';
+    return td;
+  }
+
+  function mostrarAyuda(texto, esError) {
+    const a = document.getElementById('ayuda-vista');
+    a.textContent = texto;
+    a.className = esError ? 'mal' : '';
+    a.hidden = false;
+    document.getElementById('zona-tabla').hidden = true;
+    document.getElementById('resumen').hidden = true;
+  }
+
+  function elegirTipo(nuevo) {
+    tipo = nuevo;
+    document.getElementById('tipo-fijas').setAttribute('aria-pressed', nuevo === 'CuotasFijas');
+    document.getElementById('tipo-mensual').setAttribute('aria-pressed', nuevo === 'MensualFlexible');
+    document.getElementById('campo-cuotas').hidden = nuevo !== 'CuotasFijas';
+    calcular();
+  }
+
+  async function calcular() {
+    const miTurno = ++turno;
+    const capital = numero(c.capital.value);
+    const mayor = numero(c.mayor.value);
+    const menor = c.menor.value.trim() === '' ? mayor : numero(c.menor.value);
+    const cuotas = tipo === 'CuotasFijas' ? parseInt(c.cuotas.value, 10) : 1;
+
+    if (capital === null || mayor === null || menor === null || !(cuotas >= 1)) {
+      mostrarAyuda('Completa los datos para ver el cálculo.', false);
+      return;
+    }
+    if (mayor < menor) {
+      mostrarAyuda('El interés mayor debe ser igual o mayor que el menor.', true);
+      return;
+    }
+
+    try {
+      const plan = await api('/api/prestamos/simular', {
+        method: 'POST',
+        body: { capital, interesMayor: mayor, interesMenor: menor, cuotas }
+      });
+      if (miTurno !== turno) return; // llegó un cálculo más nuevo
+      pintar(plan, mayor, menor);
+    } catch (e) {
+      if (miTurno === turno) mostrarAyuda(e.message, true);
+    }
+  }
+
+  function pintar(plan, mayor, menor) {
+    const fijas = tipo === 'CuotasFijas';
+    document.getElementById('ayuda-vista').hidden = true;
+    document.getElementById('zona-tabla').hidden = false;
+    document.getElementById('resumen').hidden = false;
+
+    document.getElementById('titulo-vista').textContent = fijas ? 'Vista previa del cronograma' : 'Vista previa del primer mes';
+    document.getElementById('th-num').textContent = fijas ? 'Cuota' : 'Mes';
+    document.getElementById('th-menor').textContent = 'I(' + menor.toFixed(2) + '%)';
+    document.getElementById('th-dif').textContent = 'I(' + (mayor - menor).toFixed(2) + '%)';
+    document.getElementById('th-dif').hidden = Math.abs(mayor - menor) < 1e-9;
+    document.getElementById('th-total').textContent = fijas ? 'Total cuota' : 'Interés del mes';
+
+    const cuerpo = document.getElementById('filas');
+    cuerpo.innerHTML = '';
+    plan.cuotas.forEach(q => {
+      const tr = document.createElement('tr');
+      tr.appendChild(dato(q.numero));
+      tr.appendChild(dato(soles(q.interesMenor)));
+      if (Math.abs(mayor - menor) >= 1e-9) tr.appendChild(dato(soles(q.diferencia)));
+      tr.appendChild(dato(soles(fijas ? q.total : q.interesMenor + q.diferencia), true));
+      cuerpo.appendChild(tr);
+    });
+
+    const interesMes = plan.cuotas[0].interesMenor + plan.cuotas[0].diferencia;
+    document.getElementById('r-capital').textContent = soles(plan.capitalTotal);
+    document.getElementById('l-total').textContent = fijas ? 'Total a cobrar' : 'Interés del primer mes';
+    document.getElementById('r-total').textContent = soles(fijas ? plan.totalACobrar : interesMes);
+    document.getElementById('r-ganancia').textContent = soles(fijas ? plan.ganancia : plan.cuotas[0].interesMenor) + (fijas ? '' : ' al mes');
+  }
+
+  function programarCalculo() {
+    clearTimeout(espera);
+    espera = setTimeout(calcular, 400);
+  }
+
+  ['capital', 'mayor', 'menor', 'cuotas'].forEach(id => c[id].addEventListener('input', programarCalculo));
+  document.getElementById('tipo-fijas').addEventListener('click', () => elegirTipo('CuotasFijas'));
+  document.getElementById('tipo-mensual').addEventListener('click', () => elegirTipo('MensualFlexible'));
+
+  document.getElementById('formulario').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorForm.textContent = '';
+
+    const clienteId = parseInt(c.cliente.value, 10);
+    const capital = numero(c.capital.value);
+    const mayor = numero(c.mayor.value);
+    const menor = c.menor.value.trim() === '' ? mayor : numero(c.menor.value);
+    const cuotas = parseInt(c.cuotas.value, 10);
+
+    if (!clienteId) { errorForm.textContent = 'Elige un cliente.'; return; }
+    if (capital === null || mayor === null || menor === null) { errorForm.textContent = 'Completa el monto y los intereses.'; return; }
+    if (mayor < menor) { errorForm.textContent = 'El interés mayor debe ser igual o mayor que el menor.'; return; }
+    if (tipo === 'CuotasFijas' && !(cuotas >= 1)) { errorForm.textContent = 'Escribe el número de cuotas.'; return; }
+
+    const cuerpo = { clienteId, capital, interesMayor: mayor, interesMenor: menor, fechaInicio: c.fecha.value || null };
+    if (tipo === 'CuotasFijas') cuerpo.cuotas = cuotas;
+
+    botonCrear.disabled = true;
+    try {
+      if (idEditar) {
+        await api('/api/prestamos/' + encodeURIComponent(idEditar), {
+          method: 'PUT',
+          body: { ...cuerpo, cuotas: tipo === 'CuotasFijas' ? cuotas : null }
+        });
+      } else {
+        await api(tipo === 'CuotasFijas' ? '/api/prestamos' : '/api/prestamos/mensual', { method: 'POST', body: cuerpo });
+      }
+      
+      location.href = '/prestamos.html';
+    } catch (err) {
+      errorForm.textContent = err.message;
+      botonCrear.disabled = false;
+    }
+  });
+
+  async function cargarClientes() {
+    try {
+      const clientes = await api('/api/clientes');
+      c.cliente.innerHTML = '';
+      if (clientes.length === 0) {
+        const o = document.createElement('option');
+        o.value = '';
+        o.textContent = 'Primero crea un cliente';
+        c.cliente.appendChild(o);
+        return;
+      }
+      clientes.forEach(cl => {
+        const o = document.createElement('option');
+        o.value = cl.id;
+        o.textContent = cl.nombre + (cl.documento ? ' (' + cl.documento + ')' : '');
+        c.cliente.appendChild(o);
+      });
+    } catch (e) {
+      errorForm.textContent = e.message;
+    }
+  }
+
+  async function iniciar() {
+    await cargarClientes();
+    if (!idEditar) return;
+    try {
+      const p = await api('/api/prestamos/' + encodeURIComponent(idEditar));
+      document.getElementById('titulo-pagina').textContent = 'Editar préstamo';
+      botonCrear.textContent = 'Guardar cambios';
+      document.getElementById('tipo-fijas').disabled = true;
+      document.getElementById('tipo-mensual').disabled = true;
+      c.cliente.value = p.clienteId;
+      c.capital.value = p.capitalOriginal;
+      c.mayor.value = p.tasaMensual;
+      c.menor.value = p.tasaMenor ?? '';
+      c.fecha.value = p.fechaInicio;
+      if (p.numeroCuotas) c.cuotas.value = p.numeroCuotas;
+      elegirTipo(p.tipo);
+    } catch (e) {
+      errorForm.textContent = e.message;
+    }
+  }
+
+  iniciar();
+</script>
+</body>
+</html>

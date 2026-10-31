@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RegistroPagos · Préstamo</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  td.verde { background: var(--verde); color: var(--verde-texto); font-weight: 700; }
+  .nota { display: block; margin-top: 4px; font-size: 12px; font-weight: 500; }
+  .botones { display: flex; justify-content: flex-end; gap: 10px; }
+  #vista-pago { background: #E3F1EE; border-radius: 12px; padding: 14px; color: #0B5445; display: flex; flex-direction: column; gap: 6px; font-size: 14px; }
+  #vista-pago.mal { background: #FDE7E4; color: #9B1C12; }
+  #vista-pago .fila { display: flex; justify-content: space-between; gap: 12px; }
+  #vista-pago .efecto { margin-top: 4px; font-weight: 700; }
+</style>
+</head>
+<body>
+<div id="barra"></div>
+<main class="pagina">
+  <div class="cabecera">
+    <div>
+      <h1 id="titulo">Préstamo</h1>
+      <div class="sub" id="subtitulo"></div>
+    </div>
+    <div style="display: flex; flex-wrap: wrap; gap: 10px">
+      <button type="button" id="abrir-pago" class="btn" hidden>Registrar pago</button>
+      <a href="/prestamos.html" class="btn-sec" style="display: inline-flex; align-items: center; text-decoration: none">Volver a la lista</a>
+    </div>
+  </div>
+  <div id="error" class="sub" style="color: #9B1C12" role="alert"></div>
+
+  <div class="resumen">
+    <div class="caja"><div class="l">Capital pendiente</div><div class="v" id="r-capital">…</div></div>
+    <div class="caja" style="background: #E3F1EE"><div class="l" style="color: #0B5445">Tu ganancia cobrada</div><div class="v" style="color: #0B5445" id="r-ganancia">…</div></div>
+    <div class="caja"><div class="l">Próximo cobro</div><div class="v" id="r-proximo" style="font-size: 20px">…</div></div>
+  </div>
+
+  <div class="tarjeta">
+    <h2 style="margin: 0 0 8px; font-size: 18px">Cronograma y estado de cuotas</h2>
+    <div class="tabla">
+      <table>
+        <thead>
+          <tr><th>Cuota</th><th>Vence</th><th>Capital</th><th id="th-menor"></th><th id="th-dif"></th><th>Total cuota</th></tr>
+        </thead>
+        <tbody id="filas"></tbody>
+      </table>
+    </div>
+    <div class="sub" style="margin-top: 12px">Verde = interés I(3.00%) y cuota pagados</div>
+  </div>
+</main>
+
+<dialog id="dialogo-pago">
+  <form id="form-pago" novalidate style="display: flex; flex-direction: column; gap: 14px">
+    <h2 style="margin: 0; font-size: 22px">Registrar pago</h2>
+    <div id="info-cuota" class="sub"></div>
+    <div style="display: flex; gap: 8px">
+      <button type="button" class="btn-sec" id="atajo-interes" style="flex: 1; padding: 0 8px; font-size: 14px"></button>
+      <button type="button" class="btn-sec" id="atajo-completa" style="flex: 1; padding: 0 8px; font-size: 14px"></button>
+    </div>
+    <div class="campo">
+      <label for="monto">Monto recibido (S/)</label>
+      <input id="monto" type="text" inputmode="decimal" autocomplete="off">
+      <div class="sub" id="minimo"></div>
+    </div>
+    <div id="vista-pago" hidden role="status" aria-live="polite"></div>
+    <div class="campo">
+      <label for="metodo">Método</label>
+      <select id="metodo">
+        <option value="Efectivo">Efectivo</option>
+        <option value="Transferencia">Transferencia</option>
+        <option value="Yape">Yape</option>
+        <option value="Plin">Plin</option>
+        <option value="Otro">Otro</option>
+      </select>
+    </div>
+    <div id="error-pago" class="error-form" role="alert" aria-live="polite"></div>
+    <div class="botones">
+      <button type="button" id="cancelar-pago" class="btn-sec">Cancelar</button>
+      <button type="submit" id="confirmar-pago" class="btn" disabled>Confirmar pago</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/js/api.js"></script>
+<script>
+  if (!sessionStorage.getItem('token')) location.href = '/index.html';
+  pintarBarra('prestamos');
+
+  const id = new URLSearchParams(location.search).get('id');
+  let prestamo = null;
+  let actual = null;      // la cuota que se está pagando
+  let claveUnica = null;  // evita que un doble clic registre el pago dos veces
+  let vistaValida = false;
+  let turno = 0;
+  let espera;
+
+  const dialogo = document.getElementById('dialogo-pago');
+  const campoMonto = document.getElementById('monto');
+  const botonConfirmar = document.getElementById('confirmar-pago');
+  const atajoInteres = document.getElementById('atajo-interes');
+  const atajoCompleta = document.getElementById('atajo-completa');
+  const errorPago = document.getElementById('error-pago');
+
+  // "500", "500.50", "500,50" y "1,000" (mil) -> número. Devuelve null si no es un número.
+  function numero(texto) {
+    let t = String(texto).trim().replace(/\s/g, '');
+    if (/^\d{1,3}(,\d{3})+(\.\d+)?$/.test(t)) t = t.replace(/,/g, '');
+    else t = t.replace(',', '.');
+    const n = Number(t);
+    return t !== '' && Number.isFinite(n) ? n : null;
+  }
+
+  function redondear(n) { return Math.round(n * 100) / 100; }
+
+  function celda(texto, verde, nota) {
+    const td = document.createElement('td');
+    td.textContent = texto;
+    if (verde) td.className = 'verde';
+    if (nota) {
+      const n = document.createElement('span');
+      n.className = 'nota';
+      n.textContent = nota;
+      td.appendChild(n);
+    }
+    return td;
+  }
+
+  async function cargar() {
+    try {
+      const p = await api('/api/prestamos/' + encodeURIComponent(id));
+      const fijas = p.tipo === 'CuotasFijas';
+      const menor = p.tasaMenor || 0;
+      const diferencia = p.tasaMensual - menor;
+      prestamo = p;
+
+      document.getElementById('titulo').textContent = p.cliente;
+      document.getElementById('subtitulo').textContent =
+        (fijas ? 'Cuotas fijas' : 'Mensual flexible') + ' · ' + soles(p.capitalOriginal) +
+        ' · interés ' + p.tasaMensual + '% (tuyo ' + menor + '%) · ' + (p.estado === 'Activo' ? 'Activo' : 'Cancelado');
+      document.getElementById('th-menor').textContent = 'I(' + menor.toFixed(2) + '%)';
+      document.getElementById('th-dif').textContent = 'I(' + diferencia.toFixed(2) + '%)';
+      document.getElementById('th-dif').hidden = diferencia < 1e-9;
+
+      let ganancia = 0;
+      let proximo = null;
+      const cuerpo = document.getElementById('filas');
+      cuerpo.innerHTML = '';
+
+      p.cuotas.forEach((q, i) => {
+        const pagada = q.interesPagado > 0;
+        if (pagada) ganancia += q.interesMenor;
+        else if (!proximo) proximo = q;
+
+        const capital = pagada ? q.capitalPagado : q.capitalProgramado;
+        const total = pagada ? q.interesPagado + q.capitalPagado : q.interesGenerado + q.capitalProgramado;
+
+        const tr = document.createElement('tr');
+        tr.appendChild(celda(i + 1));
+        tr.appendChild(celda(fechaCorta(q.fechaVence)));
+        tr.appendChild(celda(capital > 0 ? soles(capital) : '—'));
+        tr.appendChild(celda(soles(q.interesMenor)));
+        if (diferencia >= 1e-9) tr.appendChild(celda(soles(q.diferencia), pagada, pagada ? '✓ Pagado' : ''));
+        tr.appendChild(celda(soles(total), pagada, pagada ? '✓ Pagada' : ''));
+        cuerpo.appendChild(tr);
+      });
+
+      actual = proximo;
+      document.getElementById('abrir-pago').hidden = !(p.estado === 'Activo' && proximo);
+      document.getElementById('r-capital').textContent = soles(p.capitalPendiente);
+      document.getElementById('r-ganancia').textContent = soles(ganancia);
+      document.getElementById('r-proximo').textContent = proximo
+        ? fechaCorta(proximo.fechaVence) + ' · ' + soles(proximo.interesGenerado + proximo.capitalProgramado)
+        : 'Sin cobros pendientes';
+    } catch (e) {
+      document.getElementById('error').textContent = e.message;
+    }
+  }
+
+  // ---- Registrar pago ----
+
+  function abrirPago() {
+    const fijas = prestamo.tipo === 'CuotasFijas';
+    const interes = actual.interesGenerado;
+    const completo = redondear(fijas ? interes + actual.capitalProgramado : interes + prestamo.capitalPendiente);
+
+    claveUnica = crypto.randomUUID();
+    vistaValida = false;
+    campoMonto.value = '';
+    errorPago.textContent = '';
+    document.getElementById('vista-pago').hidden = true;
+    botonConfirmar.disabled = true;
+
+    document.getElementById('info-cuota').textContent = 'Se está pagando la cuota del ' + fechaCorta(actual.fechaVence);
+    document.getElementById('minimo').textContent = 'Mínimo ' + soles(interes) + ': el interés de la cuota';
+    atajoInteres.textContent = 'Solo interés · ' + soles(interes);
+    atajoInteres.dataset.monto = interes;
+    atajoCompleta.textContent = (fijas ? 'Cuota completa · ' : 'Cancelar préstamo · ') + soles(completo);
+    atajoCompleta.dataset.monto = completo;
+
+    dialogo.showModal();
+    campoMonto.focus();
+  }
+
+  function textoEfecto(r) {
+    const nueva = r.cuotaNueva;
+    switch (r.efecto) {
+      case 'Desplaza': return 'Solo interés: el cronograma se corre un mes.';
+      case 'Continua': return 'Cuota completa: sigue la cuota siguiente.';
+      case 'Desarma': return 'El cronograma se reemplaza por una sola cuota: capital ' + soles(nueva.capital) +
+        ' + interés ' + soles(nueva.interesMenor + nueva.diferencia) + ' = ' + soles(nueva.total) + '.';
+      case 'Sigue': return 'Próximo mes: interés de ' + soles(nueva.interesMenor + nueva.diferencia) +
+        ' sobre ' + soles(r.capitalRestante) + ' de capital.';
+      case 'Cancela': return 'Con este pago el préstamo queda cancelado.';
+      default: return '';
+    }
+  }
+
+  function pintarVista(r) {
+    const caja = document.getElementById('vista-pago');
+    const menor = prestamo.tasaMenor || 0;
+    const dif = prestamo.tasaMensual - menor;
+    caja.className = '';
+    caja.hidden = false;
+    caja.innerHTML = '';
+
+    const fila = (a, b, negrita) => {
+      const f = document.createElement('div');
+      f.className = 'fila';
+      if (negrita) f.style.fontWeight = '700';
+      const x = document.createElement('span'); x.textContent = a;
+      const y = document.createElement('span'); y.textContent = b;
+      f.appendChild(x); f.appendChild(y);
+      return f;
+    };
+
+    caja.appendChild(fila('I(' + menor.toFixed(2) + '%) · tu interés', soles(r.interesMenor)));
+    if (dif >= 1e-9) caja.appendChild(fila('I(' + dif.toFixed(2) + '%)', soles(r.diferencia)));
+    caja.appendChild(fila('Capital', soles(r.capital)));
+    caja.appendChild(fila('Capital que queda', soles(r.capitalRestante), true));
+    const efecto = document.createElement('div');
+    efecto.className = 'efecto';
+    efecto.textContent = textoEfecto(r);
+    caja.appendChild(efecto);
+  }
+
+  async function calcularVista() {
+    const miTurno = ++turno;
+    const monto = numero(campoMonto.value);
+    const caja = document.getElementById('vista-pago');
+    vistaValida = false;
+    botonConfirmar.disabled = true;
+    if (monto === null || monto <= 0) { caja.hidden = true; return; }
+
+    try {
+      const r = await api('/api/prestamos/' + encodeURIComponent(id) + '/pagos/vista-previa', {
+        method: 'POST',
+        body: { monto }
+      });
+      if (miTurno !== turno) return; // llegó un cálculo más nuevo
+      pintarVista(r);
+      vistaValida = true;
+      botonConfirmar.disabled = false;
+    } catch (e) {
+      if (miTurno !== turno) return;
+      caja.className = 'mal';
+      caja.hidden = false;
+      caja.textContent = e.message;
+    }
+  }
+
+  campoMonto.addEventListener('input', () => {
+    clearTimeout(espera);
+    espera = setTimeout(calcularVista, 300);
+  });
+
+  [atajoInteres, atajoCompleta].forEach(b => b.addEventListener('click', () => {
+    campoMonto.value = Number(b.dataset.monto).toFixed(2);
+    calcularVista();
+  }));
+
+  document.getElementById('abrir-pago').addEventListener('click', abrirPago);
+  document.getElementById('cancelar-pago').addEventListener('click', () => dialogo.close());
+
+  document.getElementById('form-pago').addEventListener('submit', async (e) => {
+    e.preventDefault();
+    if (!vistaValida) return;
+    errorPago.textContent = '';
+    botonConfirmar.disabled = true;
+    try {
+      await api('/api/prestamos/' + encodeURIComponent(id) + '/pagos', {
+        method: 'POST',
+        body: { monto: numero(campoMonto.value), metodo: document.getElementById('metodo').value, claveUnica }
+      });
+      dialogo.close();
+      await cargar();
+    } catch (err) {
+      errorPago.textContent = err.message;
+      botonConfirmar.disabled = false;
+    }
+  });
+
+  cargar();
+</script>
+</body>
+</html>

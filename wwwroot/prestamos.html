@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RegistroPagos · Préstamos</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  .filtro { display: flex; align-items: center; gap: 10px; margin-bottom: 12px; }
+  .filtro select { height: 44px; padding: 0 12px; border: 1px solid var(--borde); border-radius: 8px; font: 400 16px 'DM Sans', system-ui, sans-serif; background: #fff; color: var(--texto); }
+</style>
+</head>
+<body>
+<div id="barra"></div>
+<main class="pagina">
+  <div class="cabecera">
+    <div>
+      <h1>Préstamos</h1>
+      <div class="sub">Todos tus préstamos y su próximo cobro</div>
+    </div>
+    <a href="/nuevo-prestamo.html" class="btn" style="display: inline-flex; align-items: center; text-decoration: none">Nuevo préstamo</a>
+  </div>
+  <div id="error" class="sub" style="color: #9B1C12" role="alert"></div>
+
+  <div class="tarjeta">
+    <div class="filtro">
+      <label for="estado" class="sub">Mostrar:</label>
+      <select id="estado">
+        <option value="Activo">Activos</option>
+        <option value="Cancelado">Cancelados</option>
+        <option value="">Todos</option>
+      </select>
+    </div>
+    <div class="tabla">
+      <table>
+        <thead><tr><th>Cliente</th><th>Monto</th><th>Próximo cobro</th><th>Editar</th><th>Estado</th></tr></thead>
+        <tbody id="filas"></tbody>
+      </table>
+    </div>
+    <div id="vacio" class="vacio" hidden>No hay préstamos para mostrar.</div>
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script>
+  if (!sessionStorage.getItem('token')) location.href = '/index.html';
+  pintarBarra('prestamos');
+
+  const selectorEstado = document.getElementById('estado');
+
+  function dato(texto) {
+    const td = document.createElement('td');
+    td.textContent = texto;
+    return td;
+  }
+
+  async function cargar() {
+    try {
+      const estado = selectorEstado.value;
+      const prestamos = await api('/api/prestamos' + (estado ? '?estado=' + estado : ''));
+
+      document.getElementById('error').textContent = '';
+      const cuerpo = document.getElementById('filas');
+      cuerpo.innerHTML = '';
+      prestamos.forEach(p => {
+        const tr = document.createElement('tr');
+        const tdCliente = document.createElement('td');
+        const enlace = document.createElement('a');
+        enlace.href = '/prestamo.html?id=' + p.id;
+        enlace.textContent = p.cliente;
+        enlace.style.fontWeight = '700';
+        enlace.style.color = 'var(--acento)';
+        tdCliente.appendChild(enlace);
+        tr.appendChild(tdCliente);
+        tr.appendChild(dato(soles(p.capitalOriginal)));
+        tr.appendChild(dato(p.proximoVence ? fechaCorta(p.proximoVence) : '—'));
+
+        const tdEditar = document.createElement('td');
+        if (p.estado === 'Activo' && !p.tienePagos) {
+          const editar = document.createElement('a');
+          editar.href = '/nuevo-prestamo.html?id=' + p.id;
+          editar.className = 'btn-chico';
+          editar.style.display = 'inline-flex';
+          editar.style.alignItems = 'center';
+          editar.style.textDecoration = 'none';
+          editar.textContent = 'Editar';
+          tdEditar.appendChild(editar);
+        } else {
+          tdEditar.textContent = '—';
+          tdEditar.title = 'Este préstamo ya tiene pagos o está cancelado, y no se puede editar';
+        }
+        tr.appendChild(tdEditar);
+
+        const tdEstado = document.createElement('td');
+        const chip = document.createElement('span');
+        chip.className = 'chip neutro';
+        chip.textContent = p.estado === 'Activo' ? 'Activo' : 'Cancelado';
+        tdEstado.appendChild(chip);
+        tr.appendChild(tdEstado);
+
+        cuerpo.appendChild(tr);
+      });
+      document.getElementById('vacio').hidden = prestamos.length > 0;
+    } catch (e) {
+      document.getElementById('error').textContent = e.message;
+    }
+  }
+
+  selectorEstado.addEventListener('change', cargar);
+  cargar();
+</script>
+</body>
+</html>

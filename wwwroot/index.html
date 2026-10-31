@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RegistroPagos · Iniciar sesión</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  :root { --acento: #0F6B5B; --texto: #14201C; --suave: #5A6B66; --borde: #BFCBC7; --fondo: #F2F5F4; }
+  * { box-sizing: border-box; }
+  body { margin: 0; min-height: 100vh; display: flex; align-items: center; justify-content: center; padding: 24px; background: var(--fondo); color: var(--texto); font-family: 'DM Sans', system-ui, sans-serif; }
+  .tarjeta { width: 100%; max-width: 400px; background: #fff; border: 1px solid #DDE5E2; border-radius: 16px; padding: 32px; display: flex; flex-direction: column; gap: 18px; }
+  .marca { font-size: 20px; font-weight: 700; color: var(--acento); }
+  h1 { margin: 12px 0 0; font-size: 28px; }
+  .sub { margin-top: 4px; font-size: 14px; color: var(--suave); }
+  form { display: flex; flex-direction: column; gap: 18px; }
+  .campo { display: flex; flex-direction: column; gap: 6px; }
+  label { font-size: 13px; color: var(--suave); }
+  input { min-width: 0; height: 48px; padding: 0 14px; border: 1px solid var(--borde); border-radius: 8px; font: 400 16px 'DM Sans', system-ui, sans-serif; color: var(--texto); }
+  input:focus { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .principal { height: 48px; border: 0; border-radius: 8px; background: var(--acento); color: #fff; font: 700 16px 'DM Sans', system-ui, sans-serif; cursor: pointer; }
+  .principal:disabled { opacity: .6; cursor: default; }
+  .error { min-height: 20px; font-size: 14px; color: #9B1C12; }
+  .nota { font-size: 13px; color: var(--suave); text-align: center; }
+</style>
+</head>
+<body>
+<main class="tarjeta">
+  <div>
+    <div class="marca">RegistroPagos</div>
+    <h1>Iniciar sesión</h1>
+    <div class="sub">Acceso solo para personal autorizado</div>
+  </div>
+
+  <form id="formulario" novalidate>
+    <div class="campo">
+      <label for="dni">DNI</label>
+      <input id="dni" type="text" inputmode="numeric" autocomplete="username" required>
+    </div>
+    <div class="campo">
+      <label for="clave">Contraseña</label>
+      <input id="clave" type="password" autocomplete="current-password" required>
+    </div>
+    <div id="error" class="error" role="alert" aria-live="polite"></div>
+    <button type="submit" id="entrar" class="principal">Ingresar</button>
+    <div class="nota">¿Olvidaste tu contraseña? Pide que te la restablezcan.</div>
+  </form>
+</main>
+
+<script>
+  if (sessionStorage.getItem('token')) location.href = '/panel.html';
+
+  const formulario = document.getElementById('formulario');
+  const campoDni = document.getElementById('dni');
+  const campoClave = document.getElementById('clave');
+  const botonEntrar = document.getElementById('entrar');
+  const textoError = document.getElementById('error');
+
+  formulario.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    textoError.textContent = '';
+    if (!campoDni.value.trim() || !campoClave.value) {
+      textoError.textContent = 'Escribe tu DNI y tu contraseña.';
+      return;
+    }
+    botonEntrar.disabled = true;
+    botonEntrar.textContent = 'Ingresando…';
+    try {
+      const r = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ dni: campoDni.value.trim(), clave: campoClave.value })
+      });
+      const datos = await r.json().catch(() => ({}));
+      if (!r.ok) {
+        textoError.textContent = datos.mensaje || 'No se pudo iniciar sesión. Intenta de nuevo.';
+        return;
+      }
+      sessionStorage.setItem('token', datos.token);
+      sessionStorage.setItem('nombre', datos.nombre);
+      location.href = '/panel.html';
+    } catch {
+      textoError.textContent = 'No hay conexión con el servidor.';
+    } finally {
+      botonEntrar.disabled = false;
+      botonEntrar.textContent = 'Ingresar';
+    }
+  });
+</script>
+</body>
+</html>

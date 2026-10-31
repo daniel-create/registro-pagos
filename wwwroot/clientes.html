@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RegistroPagos · Clientes</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+<style>
+  .filtros { display: flex; flex-wrap: wrap; gap: 12px; margin-bottom: 12px; }
+  .buscar { flex: 1; min-width: 220px; height: 48px; padding: 0 14px; border: 1px solid var(--borde); border-radius: 8px; font: 400 16px 'DM Sans', system-ui, sans-serif; color: var(--texto); }
+  .buscar:focus { outline: 2px solid var(--acento); outline-offset: 1px; }
+  .filtro { height: 48px; padding: 0 12px; border: 1px solid var(--borde); border-radius: 8px; background: #fff; font: 400 16px 'DM Sans', system-ui, sans-serif; color: var(--texto); }
+  dialog { max-height: 92vh; overflow-y: auto; }
+  dialog form { display: flex; flex-direction: column; gap: 14px; }
+  .botones { display: flex; justify-content: flex-end; gap: 10px; }
+  td.propio { color: var(--suave); }
+</style>
+</head>
+<body>
+<div id="barra"></div>
+<main class="pagina">
+  <div class="cabecera">
+    <div>
+      <h1>Clientes</h1>
+      <div class="sub">Busca por nombre, documento, teléfono o referido</div>
+    </div>
+    <button type="button" id="nuevo" class="btn">Nuevo cliente</button>
+  </div>
+  <div id="error" class="sub" style="color: #9B1C12" role="alert"></div>
+
+  <div class="tarjeta">
+    <div class="filtros">
+      <input id="buscar" type="search" class="buscar" placeholder="Buscar cliente…" aria-label="Buscar cliente" autocomplete="off">
+      <select id="filtro-referido" class="filtro" aria-label="Filtrar por referido">
+        <option value="">Referido: Todos</option>
+        <option value="Propio">Referido: Propio</option>
+      </select>
+    </div>
+    <div class="tabla">
+      <table>
+        <thead><tr><th>N.º</th><th>Nombre</th><th>Documento</th><th>Teléfono</th><th>Referido</th><th>Acciones</th></tr></thead>
+        <tbody id="filas"></tbody>
+      </table>
+    </div>
+    <div id="vacio" class="vacio" hidden></div>
+    <div class="sub" style="margin-top: 12px">Si el campo Referido está vacío, el cliente es tuyo y aparece como "Propio".</div>
+  </div>
+</main>
+
+<dialog id="dialogo">
+  <form id="formulario" novalidate>
+    <h2 id="titulo-dialogo" style="margin: 0; font-size: 22px"></h2>
+    <div class="campo"><label for="f-nombre">Nombre</label><input id="f-nombre" type="text" maxlength="150" autocomplete="off"></div>
+    <div class="campo"><label for="f-documento">Documento (DNI)</label><input id="f-documento" type="text" inputmode="numeric" autocomplete="off"></div>
+    <div class="campo"><label for="f-telefono">Teléfono</label><input id="f-telefono" type="tel" autocomplete="off"></div>
+    <div class="campo"><label for="f-direccion">Dirección</label><input id="f-direccion" type="text" autocomplete="off"></div>
+    <div class="campo">
+      <label for="f-referido">Referido por (opcional)</label>
+      <input id="f-referido" type="text" maxlength="150" list="lista-referidos" autocomplete="off">
+      <datalist id="lista-referidos"></datalist>
+      <div class="sub" style="font-size: 12px">Déjalo vacío si es cliente tuyo. Al escribir aparecen los referidos que ya usaste.</div>
+    </div>
+    <div id="error-form" class="error-form" role="alert" aria-live="polite"></div>
+    <div class="botones">
+      <button type="button" id="cancelar" class="btn-sec">Cancelar</button>
+      <button type="submit" id="guardar" class="btn">Guardar</button>
+    </div>
+  </form>
+</dialog>
+
+<script src="/js/api.js"></script>
+<script>
+  if (!sessionStorage.getItem('token')) location.href = '/index.html';
+  pintarBarra('clientes');
+
+  const campoBuscar = document.getElementById('buscar');
+  const filtroReferido = document.getElementById('filtro-referido');
+  const listaReferidos = document.getElementById('lista-referidos');
+  const dialogo = document.getElementById('dialogo');
+  const formulario = document.getElementById('formulario');
+  const errorForm = document.getElementById('error-form');
+  const botonGuardar = document.getElementById('guardar');
+  const campos = {
+    nombre: document.getElementById('f-nombre'),
+    documento: document.getElementById('f-documento'),
+    telefono: document.getElementById('f-telefono'),
+    direccion: document.getElementById('f-direccion'),
+    referido: document.getElementById('f-referido')
+  };
+
+  let editandoId = null;
+  let turno = 0;
+  let espera;
+
+  function opcion(valor, texto) {
+    const o = document.createElement('option');
+    o.value = valor;
+    o.textContent = texto;
+    return o;
+  }
+
+  function dato(texto, clase) {
+    const td = document.createElement('td');
+    td.textContent = texto || '—';
+    if (clase) td.className = clase;
+    return td;
+  }
+
+  // Carga los nombres de referido ya usados: para el filtro y para las sugerencias del campo.
+  async function cargarReferidos() {
+    try {
+      const referidos = await api('/api/clientes/referidos');
+      const actual = filtroReferido.value;
+      filtroReferido.innerHTML = '';
+      filtroReferido.appendChild(opcion('', 'Referido: Todos'));
+      filtroReferido.appendChild(opcion('Propio', 'Referido: Propio'));
+      listaReferidos.innerHTML = '';
+      referidos.forEach(r => {
+        filtroReferido.appendChild(opcion(r, 'Referido: ' + r));
+        listaReferidos.appendChild(opcion(r, ''));
+      });
+      filtroReferido.value = [...filtroReferido.options].some(o => o.value === actual) ? actual : '';
+    } catch (e) {
+      // Las sugerencias no son críticas: si fallan, la pantalla sigue funcionando.
+    }
+  }
+
+  async function cargar() {
+    const texto = campoBuscar.value.trim();
+    const miTurno = ++turno;
+    try {
+      const params = new URLSearchParams();
+      if (texto) params.set('buscar', texto);
+      if (filtroReferido.value) params.set('referido', filtroReferido.value);
+      const consulta = params.toString();
+      const clientes = await api('/api/clientes' + (consulta ? '?' + consulta : ''));
+      if (miTurno !== turno) return; // llegó una búsqueda más nueva
+
+      document.getElementById('error').textContent = '';
+      const cuerpo = document.getElementById('filas');
+      cuerpo.innerHTML = '';
+      clientes.forEach((c, i) => {
+        const tr = document.createElement('tr');
+        tr.appendChild(dato(String(i + 1), 'propio'));
+        tr.appendChild(dato(c.nombre));
+        tr.appendChild(dato(c.documento));
+        tr.appendChild(dato(c.telefono));
+        tr.appendChild(c.referido ? dato(c.referido) : dato('Propio', 'propio'));
+
+        const tdAccion = document.createElement('td');
+        const boton = document.createElement('button');
+        boton.type = 'button';
+        boton.className = 'btn-chico';
+        boton.textContent = 'Editar';
+        boton.addEventListener('click', () => abrirDialogo(c));
+        tdAccion.appendChild(boton);
+        tr.appendChild(tdAccion);
+
+        cuerpo.appendChild(tr);
+      });
+
+      const vacio = document.getElementById('vacio');
+      vacio.hidden = clientes.length > 0;
+      vacio.textContent = (texto || filtroReferido.value) ? 'No se encontraron clientes.' : 'Todavía no hay clientes.';
+    } catch (e) {
+      document.getElementById('error').textContent = e.message;
+    }
+  }
+
+  function abrirDialogo(cliente) {
+    editandoId = cliente ? cliente.id : null;
+    document.getElementById('titulo-dialogo').textContent = cliente ? 'Editar cliente' : 'Nuevo cliente';
+    campos.nombre.value = cliente ? cliente.nombre : '';
+    campos.documento.value = cliente && cliente.documento ? cliente.documento : '';
+    campos.telefono.value = cliente && cliente.telefono ? cliente.telefono : '';
+    campos.direccion.value = cliente && cliente.direccion ? cliente.direccion : '';
+    campos.referido.value = cliente && cliente.referido ? cliente.referido : '';
+    errorForm.textContent = '';
+    dialogo.showModal();
+    campos.nombre.focus();
+  }
+
+  document.getElementById('nuevo').addEventListener('click', () => abrirDialogo(null));
+  document.getElementById('cancelar').addEventListener('click', () => dialogo.close());
+
+  formulario.addEventListener('submit', async (e) => {
+    e.preventDefault();
+    errorForm.textContent = '';
+    if (!campos.nombre.value.trim()) {
+      errorForm.textContent = 'El nombre es obligatorio.';
+      return;
+    }
+    botonGuardar.disabled = true;
+    try {
+      await api(editandoId ? '/api/clientes/' + editandoId : '/api/clientes', {
+        method: editandoId ? 'PUT' : 'POST',
+        body: {
+          nombre: campos.nombre.value.trim(),
+          documento: campos.documento.value.trim() || null,
+          telefono: campos.telefono.value.trim() || null,
+          direccion: campos.direccion.value.trim() || null,
+          referido: campos.referido.value.trim() || null
+        }
+      });
+      dialogo.close();
+      await cargarReferidos();
+      await cargar();
+    } catch (err) {
+      errorForm.textContent = err.message;
+    } finally {
+      botonGuardar.disabled = false;
+    }
+  });
+
+  // Busca 0.3 segundos después de que dejas de escribir.
+  campoBuscar.addEventListener('input', () => {
+    clearTimeout(espera);
+    espera = setTimeout(cargar, 300);
+  });
+  filtroReferido.addEventListener('change', cargar);
+
+  cargarReferidos();
+  cargar();
+</script>
+</body>
+</html>

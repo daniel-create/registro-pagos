@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RegistroPagos · Panel</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&display=swap" rel="stylesheet">
+</head>
+<body>
+<div id="barra"></div>
+<main class="pagina">
+  <div>
+    <h1>Panel</h1>
+    <div class="sub">Resumen de tu negocio</div>
+  </div>
+  <div id="error" class="sub" style="color: #9B1C12" role="alert"></div>
+
+  <div class="resumen">
+    <div class="caja">
+      <div class="l">Capital disponible para prestar</div>
+      <div class="v" id="disponible">…</div>
+      <div class="sub" id="detalle-disponible"></div>
+    </div>
+    <div class="caja" style="background: #E3F1EE">
+      <div class="l" style="color: #0B5445">Intereses ganados hasta hoy</div>
+      <div class="v" style="color: #0B5445" id="intereses">…</div>
+      <div class="sub" id="detalle-intereses"></div>
+    </div>
+    <div class="caja">
+      <div class="l">Capital + tu ganancia</div>
+      <div class="v" id="total-negocio">…</div>
+      <div class="sub">Capital aportado más tus intereses ganados</div>
+    </div>
+  </div>
+
+  <div class="tarjeta">
+    <h2 style="margin: 0 0 8px; font-size: 18px">Cobros de esta semana</h2>
+    <div class="sub" style="margin-bottom: 8px">Lo vencido, lo de hoy y lo que vence en los próximos 7 días</div>
+    <div class="tabla">
+      <table>
+        <thead><tr><th>Cliente</th><th>Vence</th><th>Estado</th><th>A cobrar</th></tr></thead>
+        <tbody id="filas"></tbody>
+      </table>
+    </div>
+    <div id="vacio" class="vacio" hidden>No hay cobros para esta semana.</div>
+  </div>
+</main>
+
+<script src="/js/api.js"></script>
+<script>
+  if (!sessionStorage.getItem('token')) location.href = '/index.html';
+  pintarBarra('panel');
+
+  const hoy = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Lima' });
+
+  function aMilis(iso) {
+    const [a, m, d] = iso.split('-').map(Number);
+    return Date.UTC(a, m - 1, d);
+  }
+  function sumarDias(iso, n) {
+    return new Date(aMilis(iso) + n * 86400000).toISOString().slice(0, 10);
+  }
+  function diasEntre(desde, hasta) {
+    return Math.round((aMilis(hasta) - aMilis(desde)) / 86400000);
+  }
+
+  function dato(texto) {
+    const td = document.createElement('td');
+    td.textContent = texto;
+    return td;
+  }
+
+  async function cargar() {
+    try {
+      const [resumen, cobros] = await Promise.all([
+        api('/api/panel/resumen'),
+        api('/api/cobros?hasta=' + sumarDias(hoy, 7))
+      ]);
+
+      const disponible = document.getElementById('disponible');
+      disponible.textContent = soles(resumen.capitalDisponible);
+      disponible.style.color = resumen.capitalDisponible < 0 ? '#9B1C12' : '';
+      document.getElementById('detalle-disponible').textContent =
+        'Aportado ' + soles(resumen.capitalAportado) + ' − prestado ' + soles(resumen.capitalPrestado);
+
+      document.getElementById('intereses').textContent = soles(resumen.interesesGanados);
+      document.getElementById('detalle-intereses').textContent =
+        'De ' + soles(resumen.cobradoAClientes) + ' cobrados a clientes (el resto es de la otra persona)';
+
+      document.getElementById('total-negocio').textContent = soles(resumen.capitalMasGanancia);
+
+      const filas = cobros.map(c => ({ ...c, dias: diasEntre(hoy, c.vence) }));
+      const cuerpo = document.getElementById('filas');
+      cuerpo.innerHTML = '';
+      filas.forEach(f => {
+        const tr = document.createElement('tr');
+
+        const tdCliente = document.createElement('td');
+        const enlace = document.createElement('a');
+        enlace.href = '/prestamo.html?id=' + f.prestamoId;
+        enlace.textContent = f.cliente;
+        enlace.style.fontWeight = '700';
+        enlace.style.color = 'var(--acento)';
+        tdCliente.appendChild(enlace);
+        tr.appendChild(tdCliente);
+
+        tr.appendChild(dato(fechaCorta(f.vence)));
+
+        const tdEstado = document.createElement('td');
+        const chip = document.createElement('span');
+        if (f.dias < 0) {
+          chip.className = 'chip mal';
+          chip.textContent = 'Vencida hace ' + (-f.dias) + (f.dias === -1 ? ' día' : ' días');
+        } else if (f.dias === 0) {
+          chip.className = 'chip neutro';
+          chip.textContent = 'Hoy';
+        } else {
+          chip.className = 'chip neutro';
+          chip.textContent = 'En ' + f.dias + (f.dias === 1 ? ' día' : ' días');
+        }
+        tdEstado.appendChild(chip);
+        tr.appendChild(tdEstado);
+
+        tr.appendChild(dato(soles(f.tipo === 'CuotasFijas' ? f.totalCuota : f.interes)));
+        cuerpo.appendChild(tr);
+      });
+      document.getElementById('vacio').hidden = filas.length > 0;
+    } catch (e) {
+      document.getElementById('error').textContent = e.message;
+    }
+  }
+
+  cargar();
+</script>
+</body>
+</html>
